@@ -1,114 +1,74 @@
-#
-# * Installation:
-# *
-# * 1) run the 'setup' function. it will pre-create the labels
-# * 2) setup trigger for processLabels every 5 min
-# * 3) setup trigger for processReminders every 30 min
-#
-setup = ->
-  setupLabels_()
-processLabels = ->
-  forEachLabel_ LABELS, (l) ->
-    name = labelName_(l)
-    label = GmailApp.getUserLabelByName(name)
-    return  unless label
-    ts = labelTimestamp_(l)
-    Logger.log "moving " + l + "to " + ts
+_l = -> Logger.log.apply(Logger, arguments)
 
-processReminders = ->
-  labels = find_reminders_()
-  i = 0
-  l = labels.length
+D = new Date()
+NOW = D.getTime()
+TODAY = new Date(D.getFullYear(), D.getMonth(), D.getDate()).getTime()
 
-  #while i < l
-  #  threads = labels[i].getThreads()
-  #  if threads.length
-  #    GmailApp.moveThreadsToInbox threads
-  #    labels[i].removeFromThreads threads
-  #    labels[i].deleteLabel()
-  #  i++
+`
+function setup() {
+  InputLabel.root().create()
+  InputLabel.createAll();
+  ReminderLabel.root().create()
+}
 
+function process() {
+  InputLabel.processAll();
+  ReminderLabel.processAll();
+}
+`
 
-# Helpers 
+class Label
+  LABELS = {}
 
-labelName_ = (l) ->
-  "#later/" + l
+  constructor: ({@name, @instance})->
 
-forEachLabel_ = (labels, f) ->
-  i = 0
-  len = labels.length
+  create: ->
+    _l "create #{@name}"
+    @instance ||= @get() || GmailApp.createLabel(@name)
 
-  while i < len
-    f labels[i]
-    i++
+  delete: ->
+    _l "removing #{@name}"
+    @get()?.deleteLabel()
 
-setupLabels_ = ->
-  GmailApp.createLabel "#later"
-  forEachLabel_ LABELS, (l) ->
-    GmailApp.createLabel label_name(l)
+  get: ->
+    @instance ||= GmailApp.getUserLabelByName(@name)
 
-labelTimestamp_ = (label) ->
-  match = /^(\d+)([hdwmy])$/.exec(label)
-  unless match
-    Logger.log "no match"
-    return
-  n = match[1]
-  x = match[2]
-  Logger.log "n=" + n + " x=" + x
-  switch match[2]
-    when "h"
-      NOW_TS + n * H
-    when "d"
-      DAY_START_TS + n * D
-    when "w"
-      DAY_START_TS + n * W
-    when "m"
-      DAY_START_TS + n * M
-    when "y"
-      DAY_START_TS + n * Y
+  threads: ->
+    @get()?.getThreads()
 
-#///////////////////
+  isEmpty: ->
+    ! @threads().length
 
-is_outdated_reminder_label_ = (label, now) ->
-  name = label.getName()
-  reminder = (name.match(new RegExp(/^\[Reminders\]\//)) or [])[0]
-  return false  unless reminder
-  time = new Date(parseInt(name.substr(reminder.length), 10))
-  time < now
+  moveTo: (to, {remove}={})->
+    _l "         #{@name} -> #{to.name}"
+    to.create().addToThreads @threads()
+    @get().removeFromThreads @threads()
+    @delete() if remove
 
-find_reminders_ = ->
-  all_labels = GmailApp.getUserLabels()
-  reminder_labels = []
-  now = (new Date()).getTime()
-  i = 0
-  l = all_labels.length
+  moveToInbox: ({remove}={})->
+    _l "         #{@name} -> Inbox"
+    GmailApp.moveThreadsToInbox @threads()
+    @get().removeFromThreads @threads()
+    @delete() if remove
 
-  while i < l
-    reminder_labels.push all_labels[i]  if is_outdated_reminder_label_(all_labels[i], now)
-    i++
-  reminder_labels
+  # Class methods
+  @byName: (name, instance)->
+    LABELS[name] ||= new @ {name, instance}
 
-reassign_labels_ = (source_label, reminder_date) ->
-  threads = source_label.getThreads()
-  return  unless threads.length
-  target_label = GmailApp.createLabel("[Reminders]/" + reminder_date.getTime())
-  target_label.addToThreads threads
-  source_label.removeFromThreads threads
+  @root: ->
+    @byName(@ROOT)
 
-map_reminders_ = (label_name, days) ->
-  source_label = GmailApp.getUserLabelByName(label_name)
-  return  unless source_label
-  time = new Date(new Date().getTime() + 60 * 60 * 24 * 1000 * days)
-  date = new Date(time.getFullYear(), time.getMonth(), time.getDate())
-  reassign_labels_ source_label, date
+  # this is not an instance method on Label, because then it would always
+  # create instances of Label. This way it creates instances of @, which can be a derived class
+  @at: (name)->
+    @byName "#{@root().name}/#{name}"
 
-map_later_ = ->
-  source_label = GmailApp.getUserLabelByName("#later")
-  return  unless source_label
-  time = new Date(new Date().getTime() + 60 * 60 * 4 * 1000) # 4 hours
-  reassign_labels_ source_label, time
+  @forEach: (method)->
+    for l in @all()
+      l[method]()
 
-LABELS = ["1h", "2h", "4h", "8h", "8h", "1d", "2d", "3d", "4d", "5d", "6d", "7d", "8d", "9d", "10d", "1w", "2w", "3w", "4w", "1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "10m", "11m", "1y"]
+  @childrenOf: (parent)->
+    @byName(l.getName(), l) for l in GmailApp.getUserLabels() when l.getName().slice(0, parent.name.length + 1) == "#{parent.name}/"
 
 H = 3600 * 1000
 D = 24 * H
@@ -116,7 +76,94 @@ W = 7 * D
 M = 30 * D
 Y = 365 * D
 
-NOW = new Date()
-NOW_TS = NOW.getTime()
-DAY_START = new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate())
-DAY_START_TS = DAY_START.getTime()
+pad = (n)->
+  if n < 10
+    "0#{n}"
+  else
+    n
+
+formatTime = (t)->
+    y = t.getFullYear()
+
+    m = pad t.getMonth() + 1
+    d = pad t.getDate()
+
+    _h = pad t.getHours()
+    _m = pad t.getMinutes()
+
+    "#{y}-#{m}-#{d} #{_h}:#{_m}"
+
+humanName = (ts)->
+  "#{formatTime new Date(ts)} - #{ts}"
+
+class InputLabel extends Label
+  @ROOT = '#later'
+
+  due_at: ->
+    throw "no match" unless match = /^(?:.*\/)?(\d+)([hdwmy])$/.exec(@name)
+    [_, n, x] = match
+    switch x
+      when "h" then NOW   + n * H
+      when "d" then TODAY + n * D
+      when "w" then TODAY + n * W
+      when "m" then TODAY + n * M
+      when "y" then TODAY + n * Y
+
+  reminder: ->
+    ReminderLabel.at humanName @due_at()
+
+  process: ->
+    return if @isEmpty()
+    @moveTo @reminder()
+
+  # Class methods
+  IN = [
+    "1h", "2h", "3h", "4h", "8h", "10h", "12h",
+    "1d", "2d", "3d", "4d", "5d", "6d", "7d", "8d", "9d", "10d",
+    "1w", "2w", "3w", "4w",
+    "1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "10m", "11m",
+    "1y"
+  ]
+
+  @all: ->
+    @in ||=
+      @at(n) for n in IN
+
+  @createAll: -> @forEach 'create'
+  @processAll: -> @forEach 'process'
+
+class ReminderLabel extends Label
+  @ROOT = '#reminders'
+
+  parent: ->
+    unless match = /^(.*\/)/.exec(@name)
+      _l "no parent match: #{@name}"
+      return
+    match[1]
+
+  due_at: ->
+    unless match = /^.*\/(?:[0-9: -]* - )([0-9]+)$/.exec(@name)
+      _l "no match: #{@name}"
+      return
+    parseInt match[1], 10
+
+  pastDue: ->
+    (n = @due_at()) && (n < NOW)
+
+  # Class methods
+  @processAll: ->
+    _l "processing at #{humanName NOW}"
+    for l in @childrenOf(@root())
+      _l l.name
+      if l.pastDue()
+        l.moveToInbox(remove: true)
+
+#  @renameAll: ->
+#    for l in @childrenOf(@root())
+#      _l l.name
+#      hname = humanName l.due_at()
+#
+#      unless hname == l.name
+#        _l "                                      -> #{hname}"
+#        to = @at hname
+#        l.moveTo to, remove: true
