@@ -5,8 +5,8 @@ This project is an installable Google App Script to "snooze" gmail messages.
 - go to http://script.google.com
 - create a new project
 - paste the contents of gmail-later.js
-- run the 'setup' function. it will pre-create the labels
-- setup trigger for process every 15/30 min
+- run the `setup` function. it will pre-create the labels
+- setup a trigger for the `process` function every 15 minutes.
 
 # Usage
 
